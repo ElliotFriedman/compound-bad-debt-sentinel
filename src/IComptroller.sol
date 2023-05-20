@@ -328,6 +328,8 @@ interface ICToken {
 
     function redeemUnderlying(uint256) external returns (uint256);
 
+    function redeem(uint256) external returns (uint256);
+
     function accrueInterest() external returns (uint256);
 
     function totalSupply() external view returns (uint256);
