@@ -53,7 +53,12 @@ contract SafeCompoundLender is CompoundBadDebtOracle, Ownable2Step {
     /// @param cToken address of the cToken to supply
     /// @param amount amount of underlying to supply
     function supply(address cToken, uint256 amount) external onlyOwner {
-        cTokens.add(cToken); /// no-op if already added
+        require(cToken != ceth, "ceth disallowed");
+        /// if not added yet, max approve underlying to be spent by cToken
+        if (cTokens.add(cToken)) {
+            _approveCToken(cToken, type(uint256).max);
+        }
+
         require(ICToken(cToken).mint(amount) == 0, "mint failed");
     }
 
@@ -62,6 +67,7 @@ contract SafeCompoundLender is CompoundBadDebtOracle, Ownable2Step {
     /// only works for cETH
     /// @param cToken address of the cToken to supply
     function supplyEth(address cToken) external payable onlyOwner {
+        require(cToken == ceth, "only ceth");
         cTokens.add(cToken); /// no-op if already added
         ICEth(cToken).mint{value: msg.value}();
     }
@@ -75,12 +81,13 @@ contract SafeCompoundLender is CompoundBadDebtOracle, Ownable2Step {
     }
 
     function redeemAll(address cToken) external onlyOwner {
-        uint256 balance = ICToken(cToken).balanceOfUnderlying(address(this));
-        require(ICToken(cToken).redeemUnderlying(balance) == 0, "redeem failed");
+        uint256 balance = ICToken(cToken).balanceOf(address(this));
+        require(ICToken(cToken).redeem(balance) == 0, "redeem failed");
         cTokens.remove(cToken); /// remove cToken from set
     }
 
     /// @notice owner can call arbitrary functions on any contract with any amount of eth
+    /// this function is used to transfer tokens out of the contract
     /// @param target address of the contract to call
     /// @param value amount of eth to send
     /// @param data calldata to send
@@ -103,8 +110,9 @@ contract SafeCompoundLender is CompoundBadDebtOracle, Ownable2Step {
         require(getTotalBadDebt(addresses) >= badDebtThreshold, "bad debt below threshold");
         require(cTokens.length() > 0, "no position to unwind");
 
-        for (uint256 i = 0; i < cTokens.length(); i++) {
+        for (uint256 i = 0; i < cTokens.length(); i++) {     
             address cToken = cTokens.at(i);
+            ICToken(cToken).accrueInterest(); /// accrue before getting balance of underlying
             uint256 balance = ICToken(cToken).balanceOfUnderlying(address(this));
             uint256 actualCtokenBalance;
             if (cToken == ceth) {
@@ -114,7 +122,7 @@ contract SafeCompoundLender is CompoundBadDebtOracle, Ownable2Step {
                 actualCtokenBalance = IERC20(underlying).balanceOf(address(cToken));
             }
 
-            /// if no liquidity, or no balance, no sense in attempting to redeem
+            /// if no liquidity, or no balance, do not redeem
             if (balance != 0 && actualCtokenBalance != 0) {
                 require(
                     ICToken(cToken).redeemUnderlying(
